@@ -1,0 +1,214 @@
+﻿#This R-code describes the complete path of a fertilizer particle of a blend (or one fertilizer type), from spreader hopper to spinning disk to air to ground surface. The model complements the analytical approach taken by Villette et al. (2005) to the motion of a fertilizer particle on a rotating disk and the Hybrid Centrifugal Spreading Model (HCSM) published by Villette et al. (2017). 
+
+#Author and main contributor to the current version: Maksim Poltoradnev
+
+#Contact: kim1.5@mail.ru, m.potltoradnev@ufertilizers.com
+
+#Nomenclature:
+	#Fertilizer related parameters
+		#d - fertilizer granule diameter, m
+		#ro - density of the fertiliser granule, kg m^-3
+		#spher - fertilizer granule sphericity factor (Cool)
+		#Cd - drag coefficient, -
+		#m - mass of a granule, kg
+		#Ap - particle frontal area, m^2
+		
+	#Parameters related to the motion on the disk
+		#w - rotational speed of the spinning disk, rpm (needs to be converted to rad s-1)
+		#rlv - pitch radius of the vane, m (Villette)
+		#ap - angle between the horizontal projection of the vane and the radial location of the particle depending on rp, grad (Villette)
+		#zvane - vertical angle of the vane, grad (Villette)
+		#xd - x coordinate of the center of the disk, m
+		#yd - y coordinate of the center of the disk, m
+		#rp - abscissa of the particle on the vane (with respect to Ov), m (Villette)
+		#rv - radial location of the particle with respect to O, m (Villette)
+		#dr - velocity of the particle along the vane, m s-1
+		#hp - position angle of the particle on the disk, grad
+		#xp - x coordinate of the particle on the disk, m
+		#yp - y coordinate of the particle on the disk, m
+		#rori - radius of the inlet orifice, m
+		#xori - x coordinate of the center of the inlet orifice, m
+		#yori - y coordinate of the center of the inlet orifice, m
+		#mu - friction coefficient of the particle along the vane and the disk
+
+	#Parameters related to the motion in the air
+		#hvane - angular location of the vane with respect to i, grad (Villette)
+		#rvane - radius of the vane, m (Villette)
+		#hout - horizontal outlet angle of the granule when it leaves the vane, grad (Villette)
+		#muhout - mean value of the horizontal outlet angle, grad (Villette)
+		#stdevhout - standard deviation of the horizontal outlet angle, grad (Villette)
+		#horizontal orientation of the outlet velocity with respect to i, grad (Villette)
+		#alv - pitch (horizontal) angle of the vane, grad (Villette)
+		#zout - vertical outlet angle of the granule, grad
+		#muzout - mean value of the vertical outlet angle of the granule, grad
+		#stdevzout - standard deviation of the vertical outlet angle of the granule, grad
+		#H - height of the outer extremity of the vane, m
+		#v - horizontal component of the outlet velocity, m s^-1
+		#vout - outlet velocity, m s^-1
+		#htraj - horizontal orientation of the outlet velocity with respect to i, grad (Villette)
+		
+	#Environment related parameters
+		#roair - air density, kg m^-3 at 18 grad (Villette, engineeringtoolbox.com)
+		#muair - dynamic viscosity of air, kg m-1 s-1 at 18 grad (engineeringtoolbox.com)
+		#Re - reynolds number, -
+		#Ka - aerodynamic coefficient, m^-1
+#-------------------------------------------------------------------------------------------------------------
+
+library(sp)
+library(drc)
+	
+#Step 1: Set up fertilizer particle properties
+
+#set up the total mass of fertilizers injected by the disk (vol, in kg), per-unit values of individual components constituting a final mixture (Fert1, Fert2, Fert3, in %), prescribe physical properties and generate a virtual blend of particles by type
+
+vol <- 0.1
+Fert1 <- 0.34
+Fert2 <- 0.29
+Fert3 <- 0.37
+mix <- data.frame(Fert1=vol*Fert1, Fert2=vol*Fert2, Fert3=vol*Fert3)
+ro <- data.frame(Fert1=1690, Fert2=1970, Fert3=1910)
+spher <- data.frame(Fert1=0.907, Fert2=0.793, Fert3=0.965)
+spread <- data.frame(fert=0, d=0, ro=0, spher=0, m=0, Ap=0, x=0, y=0)
+ddistr <- read.table("C:/Users/user/Documents/Задания/NPK/Simulations/ddistrib.txt", sep=",", header=FALSE) #read in particle size distributions
+colnames(ddistr) <- c("d", "Fert1", "Fert2", "Fert3")
+
+j=1
+for(j in j:3){
+	fert=colnames(mix)[j]
+	fit <- drm(ddistr[,fert]~ddistr$d, fct=W2.2())
+	while(sum(spread$m[spread$fert==fert])<mix[,fert]){
+		i=nrow(spread)
+		d=rweibull(1, shape=coefficients(fit)[1], scale=coefficients(fit)[2])*10^-3
+		m=ro[,fert]*(pi/3)*d^3
+		Ap=pi*(d/2)^2
+		spread[i+1,] <- data.frame(fert, d, ro[,fert], spher[,fert], m, Ap, 0, 0, stringsAsFactors=FALSE)
+	}
+	j=j+1
+}
+spread<-spread[-1,]
+	
+#Step 2: Set up disk and inlet
+
+#create inlet orifice spatial object
+xd<-0
+yd<--0.5
+rori<-0.05
+xori<-xd+0.11
+yori<-yd+0.10
+t <- seq(0,2*pi,length=100)
+orif<-t(rbind(sin(t)*rori+yori, cos(t)*rori+xori))
+orif<-as.data.frame(orif)
+coordinates(orif)<- ~ V1 + V2
+orif<-Polygon(orif)
+orif<-Polygons(list(orif),1)
+orif<-SpatialPolygons(list(orif))
+
+#set up disk properties
+w <- 810*2*pi/60
+grad <- pi/180
+rvane<-0.395
+zvane <- 13.5
+rlv <- 0.05
+mu <- 0.3
+
+j=1
+for(j in j:nrow(spread)){
+	
+	#Step 3: Motion of the particle on the spinning disk
+	
+	K=(mu*9.8*cos(zvane*grad)+9.8*sin(zvane*grad)-mu*rlv*w^2)/(w^2*cos(zvane*grad)*(cos(zvane*grad)-mu*sin(zvane*grad)))
+	C=sqrt((cos(zvane*grad))^2*(mu^2+1)-mu*sin(zvane*grad)*cos(zvane*grad))
+
+	diskp<-cbind(time=0, as.data.frame(spsample(orif, 1, type="random")))
+	colnames(diskp)<-c("time", "x", "y")
+
+	time=0
+	hp=atan((diskp$y-xd)/(diskp$x-yd))
+	rv=(diskp$x-yd)/cos(hp)
+	xp=diskp$x
+	yp=diskp$y
+	ap=asin(rlv/rv)
+	rp=cos(ap)*rv
+	dr <- 0
+	diskp<-cbind(diskp, dr=dr, rp=rp, hp=hp)
+	while(rv<=rvane){
+		time=time+0.001
+		i=nrow(diskp)
+		rp=(diskp$rp[1]-K)/(2*C)*((C-mu*cos(zvane*grad))*exp(-(C+mu*cos(zvane*grad))*w*time)+(C+mu*cos(zvane*grad))*exp((C-mu*cos(zvane*grad))*w*time))+K
+		dr=(diskp$rp[1]-K)/(2*C)*(C+mu*cos(zvane*grad))*(C-mu*cos(zvane*grad))*w*(exp((C-mu*cos(zvane*grad))*w*time)-exp(-(C+mu*cos(zvane*grad))*w*time))
+		rv=sqrt(rp^2+rlv^2)
+		hp=hp-w*0.001
+		xp=rv*cos(hp)+yd
+		yp=rv*sin(hp)+xd
+		diskp[i+1,] <- c(time, xp, yp, dr, rp, hp)
+		if(rv>rvane){
+			y=function(time){(diskp$rp[1]-K)/(2*C)*((C-mu*cos(zvane*grad))*exp(-(C+mu*cos(zvane*grad))*w*time)+(C+mu*cos(zvane*grad))*exp((C-mu*cos(zvane*grad))*w*time))+K-rp}
+			rt=uniroot(y, interval = c(0, diskp$time[i+1]))
+			time=rt$root
+			rp=sqrt(rvane^2-rlv^2)
+			dr=(diskp$rp[1]-K)/(2*C)*(C+mu*cos(zvane*grad))*(C-mu*cos(zvane*grad))*w*(exp((C-mu*cos(zvane*grad))*w*time)-exp(-(C+mu*cos(zvane*grad))*w*time))
+			hp=diskp$hp[i]-w*(time-diskp$time[i])
+			xp=rvane*cos(hp)+yd
+			yp=rvane*sin(hp)+xd
+			diskp[i+1,] <- c(time, xp, yp, dr, rp, hp)
+		}
+		
+	}
+
+	#Step 4: Motion of the particle in the air
+
+	roair <- 1.21
+	muair <- 1.803*10^-5
+	H <- 0.8
+	alv=asin(rlv/rvane)/grad
+
+	hvane=hp/grad
+	hout=atan((dr*cos(zvane*grad)*cos(alv))/(rvane*w-dr*cos(zvane*grad)*sin(alv)))/grad
+	v=dr/sin(hout*grad)
+	muzout <- atan((sin(hout*grad)/cos(alv*grad))*tan(zvane*grad))/grad
+	stdevzout <- 0.7
+	zout <- rnorm(1, mean=muzout, sd=stdevzout)
+	vout <- v/cos(zout*grad)
+	coord<-c(
+		x = xp,
+		y = yp,
+		z = H
+	)
+	htraj=hvane+hout-90
+	ini<-c(
+		vx = v*cos(htraj*grad),
+		vy = v*sin(htraj*grad),
+		vz = vout*sin(zout*grad)
+	)
+
+	i=1
+	time=0
+	traj <- data.frame(time=time, vx=ini[1], vy=ini[2], vz=ini[3], tot=sqrt(ini[1]^2+ini[2]^2+ini[3]^2), x=coord[1], y=coord[2], z=coord[3])
+	spat <- data.frame(x=0, y=0, z=0)
+	while(traj$z[i]>=0){
+		time=time+0.001
+		Re=(spread[j,"d"]*abs(traj$tot[i])*roair)/muair
+		Cd=30/Re+67.289*exp(-5.03*spread[j,"spher"])
+		Ka=1/(2*spread[j,"m"])*Cd*spread[j,"Ap"]*roair
+		ax=-traj$vx[i]*Ka*traj$tot[i]
+		ay=-traj$vy[i]*Ka*traj$tot[i]
+		az=-traj$vz[i]*Ka*traj$tot[i]-9.8
+		vx=traj$vx[i]+ax*time
+		vy=traj$vy[i]+ay*time
+		vz=traj$vz[i]+az*time
+		tot=sqrt(vx^2+vy^2+vz^2)
+		x=traj$x[i]+traj$vx[i]*time+0.5*ax*time^2
+		y=traj$y[i]+traj$vy[i]*time+0.5*ay*time^2
+		z=traj$z[i]+traj$vz[i]*time+0.5*az*time^2
+		i=i+1
+		traj[i,] <- c(time=time, vx=vx, vy=vy, vz=vz, tot=tot, x=x, y=y, z=z)
+		if(z<=0){
+			zf=0
+			r=abs(traj$z[i-1])/abs(traj$z[i])
+			xf=(r*traj$x[i]+traj$x[i-1])/(r+1)
+			yf=(r*traj$y[i]+traj$y[i-1])/(r+1)
+			spread[j,c("x", "y")] <- c(xf, yf)			
+		}
+	}
+	j=j+1
+}
