@@ -69,7 +69,7 @@ mix <- data.frame(Fert1=vol*Fert1, Fert2=vol*Fert2, Fert3=vol*Fert3)
 ro <- data.frame(Fert1=1690, Fert2=1970, Fert3=1910)
 spher <- data.frame(Fert1=0.907, Fert2=0.793, Fert3=0.965)
 spread <- data.frame(fert=0, d=0, ro=0, spher=0, m=0, Ap=0, x=0, y=0)
-ddistr <- read.table("C:/Users/user/Documents/Задания/NPK/Simulations/ddistrib.txt", sep=",", header=FALSE) #read in particle size distributions
+ddistr <- read.table("/ddistrib.txt", sep=",", header=FALSE) #read in particle size distributions
 colnames(ddistr) <- c("d", "Fert1", "Fert2", "Fert3")
 
 j=1
